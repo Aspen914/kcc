@@ -25,6 +25,7 @@ from optparse import OptionParser, OptionGroup
 from multiprocessing import Pool
 from PIL import Image, ImageChops, ImageOps, ImageDraw
 from .shared import getImageFileName, walkLevel, walkSort, sanitizeTrace
+from .panelfinder import finder
 try:
     from PyQt5 import QtCore
 except ImportError:
@@ -112,79 +113,32 @@ def splitImage(work):
                 draw = ImageDraw.Draw(drawImg)
 
             # Find panels
-            yWork = 0
-            panelDetected = False
-            panels = []
-            while yWork < heightImg:
-                tmpImg = imgProcess.crop([4, yWork, widthImg-4, yWork + 4])
-                solid = detectSolid(tmpImg)
-                if not solid and not panelDetected:
-                    panelDetected = True
-                    panelY1 = yWork - 2
-                if heightImg - yWork <= 5:
-                    if not solid and panelDetected:
-                        panelY2 = heightImg
-                        panelDetected = False
-                        panels.append((panelY1, panelY2, panelY2 - panelY1))
-                if solid and panelDetected:
-                    panelDetected = False
-                    panelY2 = yWork + 6
-                    panels.append((panelY1, panelY2, panelY2 - panelY1))
-                yWork += 5
+            panelsProcessed = finder(imgProcess)
 
             # Split too big panels
-            panelsProcessed = []
-            for panel in panels:
-                if panel[2] <= opt.height * 1.5:
-                    panelsProcessed.append(panel)
-                elif panel[2] < opt.height * 2:
-                    diff = panel[2] - opt.height
-                    panelsProcessed.append((panel[0], panel[1] - diff, opt.height))
-                    panelsProcessed.append((panel[1] - opt.height, panel[1], opt.height))
-                else:
-                    parts = round(panel[2] / opt.height)
-                    diff = panel[2] // parts
-                    for x in range(0, parts):
-                        panelsProcessed.append((panel[0] + (x * diff), panel[1] - ((parts - x - 1) * diff), diff))
-
+            
             if opt.debug:
                 for panel in panelsProcessed:
-                    draw.rectangle([(0, panel[0]), (widthImg, panel[1])], (0, 255, 0, 128), (0, 0, 255, 255))
+                    draw.rectangle([(panel[0], panel[1]), (panel[2], panel[3])], (0, 255, 0, 128), (0, 0, 255, 255))
                 debugImage = Image.alpha_composite(imgOrg.convert(mode='RGBA'), drawImg)
                 debugImage.save(os.path.join(path, os.path.splitext(name)[0] + '-debug.png'), 'PNG')
 
             # Create virtual pages
-            pages = []
-            currentPage = []
-            pageLeft = opt.height
-            panelNumber = 0
-            for panel in panelsProcessed:
-                if pageLeft - panel[2] > 0:
-                    pageLeft -= panel[2]
-                    currentPage.append(panelNumber)
-                    panelNumber += 1
-                else:
-                    if len(currentPage) > 0:
-                        pages.append(currentPage)
-                    pageLeft = opt.height - panel[2]
-                    currentPage = [panelNumber]
-                    panelNumber += 1
-            if len(currentPage) > 0:
-                pages.append(currentPage)
+            pages = [panel for panel in range(len(panelsProcessed))]
 
             # Create pages
             pageNumber = 1
             for page in pages:
                 pageHeight = 0
-                targetHeight = 0
-                for panel in page:
-                    pageHeight += panelsProcessed[panel][2]
+                targetHeight = panel[0][1]
+                
+                pageHeight += (panelsProcessed[-1][3] - panelsProcessed[0][1]) 
                 if pageHeight > 15:
                     newPage = Image.new('RGB', (widthImg, pageHeight))
                     for panel in page:
-                        panelImg = imgOrg.crop([0, panelsProcessed[panel][0], widthImg, panelsProcessed[panel][1]])
+                        panelImg = imgOrg.crop([(panel[0], panel[1]), (panel[2], panel[3])])
                         newPage.paste(panelImg, (0, targetHeight))
-                        targetHeight += panelsProcessed[panel][2]
+                        targetHeight = panelsProcessed[panel+1][1]
                     newPage.save(os.path.join(path, os.path.splitext(name)[0] + '-' + str(pageNumber) + '.png'), 'PNG')
                     pageNumber += 1
             os.remove(filePath)
